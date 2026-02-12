@@ -1,10 +1,11 @@
 #############################################
 ##
-## Q5 Transition (Shooting) — Robust RK4
-## - Disinvestment allowed (NO i>=0 constraint)
-## - RK4 forward simulation
-## - Terminal objective uses last k relative to k*
-##   even if simulation stops early (fixes no-bracket issue)
+## Q5 Shooting algorithm
+## Robust RK4
+##
+## Author: Martin Sielfeld
+## Created: 02/10/2026
+## Last edition: 02/12/2026
 ##
 #############################################
 
@@ -44,6 +45,7 @@ cat("Depreciation:\n")
 cat(sprintf("delta_e (paper) = %.3f\n", par$delta_e))
 cat(sprintf("delta_s (paper) = %.3f\n", par$delta_s))
 cat(sprintf("delta   (PS)    = %.6f\n\n", par$delta))
+
 
 ################################################
 ## Steady state (detrended) with l endogenous ##
@@ -113,8 +115,9 @@ cat(sprintf("ctilde* = %.10f\n\n", ctilde_star))
 
 par$l <- l_star
 
+
 #####################################################
-## Dynamics (ktilde,c̄tilde), disinvestment allowed ##
+## Dynamics (ktilde,ctilde), disinvestment allowed ##
 #####################################################
 
 rhs <- function(state, par) {
@@ -219,6 +222,7 @@ simulate_path_rk4 <- function(
   out
 }
 
+
 ########################
 ## Shooting objective ##
 ########################
@@ -239,9 +243,7 @@ terminal_error <- function(c0, k0, par, k_star, T_end, dt) {
 
   # if it ended early, amplify but DO NOT force negative
   if (status != "success") {
-    # amplify by how early it stopped (so uniroot avoids paths that die)
     ampl <- 1 + 50 * (T_end - t_last) / T_end
-    # keep sign from base
     if (!is.finite(base)) {
       base <- -1
     }
@@ -288,7 +290,6 @@ find_c_bracket <- function(
   ))
 
   if (length(idx) == 0) {
-    # print a few diagnostics
     imn <- which.min(vals)
     imx <- which.max(vals)
     cat(sprintf("  min f=%.4g at c0=%.6g\n", vals[imn], grid[imn]))
@@ -300,6 +301,7 @@ find_c_bracket <- function(
 
   c(grid[idx[1]], grid[idx[1] + 1])
 }
+
 
 ##########################################
 ## Solve for c0 and simulate transition ##
@@ -325,13 +327,67 @@ cat(sprintf("Shooting solution c0 = %.10f\n\n", c0_star))
 path <- simulate_path_rk4(k0, c0_star, par, T_end = T_end, dt = dt)
 cat("RK4 status:", attr(path, "status"), " t_last=", max(path$time), "\n")
 
+
+######################################################
+## Levels + dots (analytic) + ke/ks levels and dots ##
+######################################################
+
+# levels
 path$ytilde <- par$Gamma * path$ktilde^par$alpha * par$l^(1 - par$alpha)
 path$itilde <- path$ytilde - path$ctilde
+
+# numeric diagnostic (already had)
 path$kdot_num <- c(NA_real_, diff(path$ktilde) / dt)
+
+# analytic dots from model equations
+path$kdot <- path$ytilde - path$ctilde - (par$delta + par$g_z) * path$ktilde
+path$cdot <- path$ctilde *
+  (par$alpha * (path$ytilde / path$ktilde) - par$delta - par$rho - par$g_z)
+
+# ydot via chain rule (l fixed): y = Gamma k^alpha l^(1-alpha)
+path$ydot <- (par$alpha * path$ytilde / path$ktilde) * path$kdot
+
+# idot = ydot - cdot
+path$idot <- path$ydot - path$cdot
+
+# recovered capital types (PS one-capital simplification)
+w_e <- par$alpha_e / par$alpha
+w_s <- par$alpha_s / par$alpha
+
+path$ktilde_e <- w_e * path$ktilde
+path$ktilde_s <- w_s * path$ktilde
+
+path$kdot_e <- w_e * path$kdot
+path$kdot_s <- w_s * path$kdot
+
+
+###################################################
+## Steady-state itilde*, ke*, ks* (and dots = 0) ##
+###################################################
+
+ktilde_e_star <- w_e * ktilde_star
+ktilde_s_star <- w_s * ktilde_star
+itilde_star <- ytilde_star - ctilde_star
+
+cat(sprintf("\nSteady-state implied objects:\n"))
+cat(sprintf("itilde*    = %.10f\n", itilde_star))
+cat(sprintf("ktilde_e*  = %.10f\n", ktilde_e_star))
+cat(sprintf("ktilde_s*  = %.10f\n", ktilde_s_star))
+cat(sprintf(
+  "check sum  = %.10f (should equal ktilde*)\n",
+  ktilde_e_star + ktilde_s_star
+))
+
+
+####################################
+## Terminal diagnostics (levels)  ##
+####################################
 
 kT <- tail(path$ktilde, 1)
 cT <- tail(path$ctilde, 1)
 yT <- tail(path$ytilde, 1)
+iT <- tail(path$itilde, 1)
+
 cat(sprintf(
   "Terminal: k(T)=%.10f (rel err %.3e)\n",
   kT,
@@ -343,9 +399,14 @@ cat(sprintf(
   (cT - ctilde_star) / ctilde_star
 ))
 cat(sprintf(
-  "          y(T)=%.10f (rel err %.3e)\n\n",
+  "          y(T)=%.10f (rel err %.3e)\n",
   yT,
   (yT - ytilde_star) / ytilde_star
+))
+cat(sprintf(
+  "          i(T)=%.10f (rel err %.3e)\n\n",
+  iT,
+  (iT - itilde_star) / itilde_star
 ))
 
 
@@ -353,72 +414,29 @@ cat(sprintf(
 ## Figures ##
 #############
 
-# Plot
-path_long <- melt.data.table(
+## Collapse data:
+path_long = melt.data.table(
   data.table(path),
   id.vars = "time",
   variable.name = "variable"
 )
 
-ss = data.table(
-  variable = c('ktilde', 'ctilde', 'ytilde', 'itilde', 'kdot_num'),
-  value = c(
-    ktilde_star,
-    ctilde_star,
-    ytilde_star,
-    (par$delta + par$g_z) * ktilde_star,
-    0
-  )
-)
-
-ggplot() +
-  geom_hline(
-    ss,
-    mapping = aes(yintercept = value, color = 'Detrended Steady State')
-  ) +
-  geom_line(path_long, mapping = aes(x = time, y = value)) +
-  facet_wrap(~variable, scales = "free_y") +
-  theme_bw() +
-  theme(legend.position = 'bottom') +
-  labs(x = 'Time', y = NULL, color = NULL)
-
-
-#####################################################
-## Recovering different types of capital evolution ##
-#####################################################
-
-w_e <- par$alpha_e / par$alpha
-w_s <- par$alpha_s / par$alpha
-
-ktilde_e_star <- w_e * ktilde_star
-ktilde_s_star <- w_s * ktilde_star
-
-cat(sprintf("ktilde_e* = %.10f\n", ktilde_e_star))
-cat(sprintf("ktilde_s* = %.10f\n", ktilde_s_star))
-cat(sprintf(
-  "check sum = %.10f (should equal ktilde*)\n",
-  ktilde_e_star + ktilde_s_star
-))
-
-path$ktilde_e <- w_e * path$ktilde
-path$ktilde_s <- w_s * path$ktilde
-
-# Plot
-path_long <- melt.data.table(
-  data.table(path),
-  id.vars = "time",
-  variable.name = "variable"
-)
-
+## Include dots in the steady-state reference lines as 0:
 ss = data.table(
   variable = c(
-    'ktilde',
-    'ktilde_e',
-    'ktilde_s',
-    'ctilde',
-    'ytilde',
-    'itilde',
-    'kdot_num'
+    "ktilde",
+    "ktilde_e",
+    "ktilde_s",
+    "ctilde",
+    "ytilde",
+    "itilde",
+    "kdot_num",
+    "kdot",
+    "cdot",
+    "ydot",
+    "idot",
+    "kdot_e",
+    "kdot_s"
   ),
   value = c(
     ktilde_star,
@@ -426,18 +444,151 @@ ss = data.table(
     ktilde_s_star,
     ctilde_star,
     ytilde_star,
-    (par$delta + par$g_z) * ktilde_star,
+    itilde_star,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
     0
   )
 )
 
-ggplot() +
+## Factors:
+path_long[,
+  lab := factor(
+    variable,
+    levels = c(
+      'ktilde',
+      'ktilde_e',
+      'ktilde_s',
+      'ctilde',
+      'ytilde',
+      'itilde',
+      'kdot_num',
+      'kdot',
+      'kdot_e',
+      'kdot_s',
+      'cdot',
+      'ydot',
+      'idot'
+    ),
+    labels = c(
+      'Detrended Capital',
+      'Detrended Equipment Capital',
+      'Detrended Structure Capital',
+      'Detrended Consumption',
+      'Detrended Production',
+      'Detrended Investment',
+      'Diagnostic K dot',
+      'K dot (model)',
+      'Equipment K dot (model)',
+      'Structure K dot (model)',
+      'C dot (model)',
+      'Y dot (model)',
+      'I dot (model)'
+    )
+  )
+]
+ss[,
+  lab := factor(
+    variable,
+    levels = c(
+      'ktilde',
+      'ktilde_e',
+      'ktilde_s',
+      'ctilde',
+      'ytilde',
+      'itilde',
+      'kdot_num',
+      'kdot',
+      'kdot_e',
+      'kdot_s',
+      'cdot',
+      'ydot',
+      'idot'
+    ),
+    labels = c(
+      'Detrended Capital',
+      'Detrended Equipment Capital',
+      'Detrended Structure Capital',
+      'Detrended Consumption',
+      'Detrended Production',
+      'Detrended Investment',
+      'Diagnostic K dot',
+      'K dot (model)',
+      'Equipment K dot (model)',
+      'Structure K dot (model)',
+      'C dot (model)',
+      'Y dot (model)',
+      'I dot (model)'
+    )
+  )
+]
+
+
+## Figures:
+plot01 =
+  ggplot() +
   geom_hline(
-    ss,
-    mapping = aes(yintercept = value, color = 'Detrended Steady State')
+    data = ss[!variable %like% 'dot'],
+    mapping = aes(yintercept = value, color = "Detrended Steady State")
   ) +
-  geom_line(path_long, mapping = aes(x = time, y = value)) +
-  facet_wrap(~variable, scales = "free_y") +
+  geom_line(
+    data = path_long[!variable %like% 'dot'],
+    mapping = aes(x = time, y = value)
+  ) +
+  facet_wrap(~lab, scales = "free_y") +
   theme_bw() +
-  theme(legend.position = 'bottom') +
-  labs(x = 'Time', y = NULL, color = NULL)
+  theme(legend.position = "bottom", plot.title.position = "plot") +
+  labs(
+    title = NULL,
+    x = "Time",
+    y = NULL,
+    color = NULL
+  )
+
+plot01
+
+ggsave(
+  plot = plot01,
+  filename = 'Transition Path in Detrended Levels.png',
+  height = 4,
+  width = 8,
+  dpi = 300
+)
+
+plot02 =
+  ggplot() +
+  geom_hline(
+    data = ss[variable %like% 'dot' & !variable %like% 'num'],
+    mapping = aes(yintercept = value, color = "Detrended Steady State")
+  ) +
+  geom_line(
+    data = path_long[variable %like% 'dot' & !variable %like% 'num'],
+    mapping = aes(x = time, y = value)
+  ) +
+  facet_wrap(~lab, scales = "free_y") +
+  theme_bw() +
+  theme(legend.position = "bottom", plot.title.position = "plot") +
+  labs(
+    title = NULL,
+    x = "Time",
+    y = NULL,
+    color = NULL
+  )
+
+plot02
+
+ggsave(
+  plot = plot02,
+  filename = 'Transition Dynamics in Detrended Time Derivatives.png',
+  height = 4,
+  width = 8,
+  dpi = 300
+)
+
+## Checks / objects you might want to print:
+ss
+l_star
