@@ -25,7 +25,7 @@ invisible(lapply(packages, library, character.only = TRUE))
 
 par <- list(
   theta = 0.4,
-  beta = 0.95,
+  beta = 0.95, ## we end up using rho
   alpha_e = 0.17,
   alpha_s = 0.13,
   alpha = 0.3,
@@ -227,7 +227,7 @@ simulate_path_rk4 <- function(
 ## Shooting objective ##
 ########################
 
-# Key fix: if simulation stops early, use sign(k_last - k*) to classify
+# if simulation stops early, use sign(k_last - k*) to classify
 terminal_error <- function(c0, k0, par, k_star, T_end, dt) {
   if (!is.finite(c0) || c0 <= 0) {
     return(-1e6)
@@ -336,7 +336,7 @@ cat("RK4 status:", attr(path, "status"), " t_last=", max(path$time), "\n")
 path$ytilde <- par$Gamma * path$ktilde^par$alpha * par$l^(1 - par$alpha)
 path$itilde <- path$ytilde - path$ctilde
 
-# numeric diagnostic (already had)
+# numeric diagnostic
 path$kdot_num <- c(NA_real_, diff(path$ktilde) / dt)
 
 # analytic dots from model equations
@@ -344,13 +344,13 @@ path$kdot <- path$ytilde - path$ctilde - (par$delta + par$g_z) * path$ktilde
 path$cdot <- path$ctilde *
   (par$alpha * (path$ytilde / path$ktilde) - par$delta - par$rho - par$g_z)
 
-# ydot via chain rule (l fixed): y = Gamma k^alpha l^(1-alpha)
+# ydot via chain rule (l fixed)
 path$ydot <- (par$alpha * path$ytilde / path$ktilde) * path$kdot
 
 # idot = ydot - cdot
 path$idot <- path$ydot - path$cdot
 
-# recovered capital types (PS one-capital simplification)
+# recovered capital types
 w_e <- par$alpha_e / par$alpha
 w_s <- par$alpha_s / par$alpha
 

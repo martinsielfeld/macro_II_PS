@@ -67,7 +67,11 @@ c_star <- ctilde_from_l(l_star)
 is_star <- (ds + gy) * ks_star
 ie_star <- (de + gy + gq) * ke_star
 
-## Print:
+
+###################
+## Print results ##
+###################
+
 cat(paste0(
   '\n',
   'Detrended Ks ss:',
